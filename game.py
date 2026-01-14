@@ -1,480 +1,252 @@
-"""
-Main game class - handles game loop, rendering, and game state.
-"""
-
-import random
 import pygame
+import sys
+import random
+import math
+import os
 
-from constants import (
-    WIDTH, HEIGHT, FPS, COLOR_BACKGROUND_START, COLOR_BACKGROUND_END,
-    COLOR_TEXT, COLOR_TEXT_LIGHT, COLOR_PARTICLE,
-    PLATFORM_SPACING, PLATFORM_BUFFER_ZONE,
-    INITIAL_PLATFORM_COUNT,
-    PLATFORM_NORMAL_CHANCE, PLATFORM_BREAKABLE_CHANCE, PLATFORM_SPRING_CHANCE,
-    CAMERA_DEAD_ZONE_TOP,
-    PARTICLE_COUNT, PARTICLE_LIFETIME, PARTICLE_SPEED,
-    FONT_SIZE_LARGE, FONT_SIZE_MEDIUM, FONT_SIZE_SMALL,
-    MAX_JUMP_HORIZONTAL_DISTANCE, PLATFORM_MIN_OFFSET, PLATFORM_MAX_OFFSET,
-    PLATFORM_WIDTH
-)
-from player import Player
-from platform import Platform
-from assets import AssetManager
+# --- CONFIGURATION ---
+RENDER = True
+RESOLUTION = WIDTH, HEIGHT = 400, 700
+TITLE = "Doodle Jump AI: Combat & Rare Items"
+FPS = 60
 
+pygame.init()
+screen = pygame.display.set_mode(RESOLUTION) if RENDER else None
+pygame.display.set_caption(TITLE)
+clock = pygame.time.Clock()
 
-class Particle:
-    """Simple particle for landing effects."""
-    
+# Colors
+BACKGROUND = (250, 248, 239)
+PLAT_GREEN, PLAT_BLUE = (63, 255, 63), (127, 191, 255)
+PLAT_RED, PLAT_WHITE = (191, 0, 0), (255, 255, 255)
+MONSTER_COLOR = (138, 43, 226)
+BLACK_HOLE_COLOR = (20, 20, 20)
+BULLET_COLOR = (255, 50, 50)
+
+# --- CLASSES ---
+
+class Projectile:
     def __init__(self, x, y):
-        self.x = x
-        self.y = y
-        self.velocity_x = random.uniform(-PARTICLE_SPEED, PARTICLE_SPEED)
-        self.velocity_y = random.uniform(-PARTICLE_SPEED, PARTICLE_SPEED)
-        self.lifetime = PARTICLE_LIFETIME
-        self.age = 0.0
-    
-    def update(self, dt):
-        """Update particle position and lifetime."""
-        self.x += self.velocity_x * dt
-        self.y += self.velocity_y * dt
-        self.age += dt
-        return self.age < self.lifetime
-    
-    def draw(self, surface, camera_y=0):
-        """Draw the particle with alpha transparency."""
-        draw_y = self.y - camera_y
-        alpha = int(255 * (1 - self.age / self.lifetime))
-        size = max(1, int(3 * (1 - self.age / self.lifetime)))
-        
-        if size > 0 and alpha > 0:
-            # Create a temporary surface with per-pixel alpha for the particle
-            particle_surface = pygame.Surface((size * 2 + 2, size * 2 + 2), pygame.SRCALPHA)
-            color_with_alpha = (*COLOR_PARTICLE, alpha)
-            pygame.draw.circle(particle_surface, color_with_alpha, (size + 1, size + 1), size)
-            surface.blit(particle_surface, (int(self.x) - size - 1, int(draw_y) - size - 1))
+        self.rect = pygame.Rect(x, y, 6, 12)
+        self.speed = -15
 
+    def update(self):
+        self.rect.y += self.speed
 
-class Game:
-    """Main game class managing the game loop and state."""
-    
+    def draw(self, surface):
+        pygame.draw.rect(surface, BULLET_COLOR, self.rect)
+
+class Player:
     def __init__(self):
-        """Initialize the game."""
-        pygame.init()
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption("Doodle Jump")
-        self.clock = pygame.time.Clock()
-        self.font_large = pygame.font.Font(None, FONT_SIZE_LARGE)
-        self.font_medium = pygame.font.Font(None, FONT_SIZE_MEDIUM)
-        self.font_small = pygame.font.Font(None, FONT_SIZE_SMALL)
-        
-        # Asset management
-        self.assets = AssetManager()
-        
-        # Game state
-        self.running = True
-        self.game_over = False
+        self.width, self.height = 30, 30
+        self.rect = pygame.Rect(WIDTH//2, HEIGHT-100, self.width, self.height)
+        self.vel_y = 0
+        self.vel_x = 0
+        self.max_vel_x = 7
+        self.accel_x = 0.8
+        self.gravity = 0.35
+        self.jump_power = -11
         self.score = 0
-        
-        # Camera offset (for scrolling) - represents how far we've scrolled
-        # camera_y increases as player climbs higher (world scrolls down)
-        # Start camera at 0 - no scrolling initially
-        self.camera_y = 0
-        
-        # Player starts in world coordinates
-        # We want player to start visible on screen, near the bottom
-        # With camera_y = 0, screen_y = world_y
-        # So set world_y to a visible screen position (near bottom)
-        initial_world_y = HEIGHT - 100  # Start player at y=500 (visible, near bottom)
-        self.highest_world_y = initial_world_y  # Track highest world y position
-        
-        self.player = Player(WIDTH // 2, initial_world_y, self.assets)
-        self.platforms = []
-        self.particles = []
-        
-        # Input state
-        self.keys_pressed = set()
-        
-        # Cached background surface for performance
-        self.background_surface = self._create_background()
-        
-        # Initialize platforms
-        self._generate_initial_platforms()
-        
-        # Give player initial jump - they'll jump up and camera will follow
-        self.player.jump()
+        self.powerup_timer = 0
+        self.shoot_cooldown = 0
 
-    def _generate_initial_platforms(self):
-        """Generate initial set of platforms in world coordinates.
-        
-        Ensures platforms are always reachable by limiting horizontal distance.
-        """
-        # Start platform should be at player's starting position or slightly below
-        # Player starts at world_y = HEIGHT - 100
-        # Platform should be at similar height so player can land on it
-        player_start_y = HEIGHT - 100
-        start_y = player_start_y + 20  # Platform slightly below player (they'll land on it)
-        start_x = WIDTH // 2 - PLATFORM_WIDTH // 2
-        start_platform = Platform(
-            start_x,
-            start_y,
-            self.assets,
-            kind="normal"
-        )
-        self.platforms.append(start_platform)
-        
-        # Track previous platform position for reachability
-        prev_x = start_x + PLATFORM_WIDTH // 2  # Center of previous platform
-        current_y = start_y - PLATFORM_SPACING
-        
-        # Generate platforms going upward, ensuring each is reachable
-        for i in range(INITIAL_PLATFORM_COUNT):
-            # Calculate reachable x position relative to previous platform
-            # Choose random direction (left or right)
-            direction = random.choice([-1, 1])
-            
-            # Random offset between MIN and MAX in chosen direction
-            # This ensures platforms are always reachable but have variety
-            offset_magnitude = random.randint(PLATFORM_MIN_OFFSET, PLATFORM_MAX_OFFSET)
-            offset = direction * offset_magnitude
-            
-            # Calculate new platform center
-            new_center_x = prev_x + offset
-            
-            # Clamp to screen bounds with margins
-            margin = 10
-            new_center_x = max(PLATFORM_WIDTH // 2 + margin, 
-                              min(new_center_x, WIDTH - PLATFORM_WIDTH // 2 - margin))
-            
-            # Platform x is left edge
-            x = new_center_x - PLATFORM_WIDTH // 2
-            
-            # Random platform type (but ensure first few are normal for easier start)
-            if i < 3:
-                kind = "normal"
+    def move(self, keys):
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]: self.vel_x -= self.accel_x
+        elif keys[pygame.K_RIGHT] or keys[pygame.K_d]: self.vel_x += self.accel_x
+        else: self.vel_x *= 0.85 
+
+        self.vel_x = max(-self.max_vel_x, min(self.max_vel_x, self.vel_x))
+        self.rect.x += self.vel_x
+        if self.rect.right < 0: self.rect.left = WIDTH
+        elif self.rect.left > WIDTH: self.rect.right = 0
+
+        if self.powerup_timer > 0:
+            self.vel_y = -18
+            self.powerup_timer -= 1
         else:
-            kind = self._random_platform_kind()
-            
-            platform = Platform(x, current_y, self.assets, kind=kind)
-            self.platforms.append(platform)
-            
-            # Update for next iteration
-            prev_x = new_center_x
-            current_y -= PLATFORM_SPACING + random.randint(-15, 15)
-    
-    def _random_platform_kind(self):
-        """Generate a random platform type based on probabilities."""
-        rand = random.random()
-        if rand < PLATFORM_SPRING_CHANCE:
-            return "spring"
-        elif rand < PLATFORM_SPRING_CHANCE + PLATFORM_BREAKABLE_CHANCE:
-            return "breakable"
-        else:
-            return "normal"
-    
-    def _handle_input(self):
-        """Handle keyboard input."""
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    self.running = False
-                elif event.key == pygame.K_r and self.game_over:
-                    self._restart()
-                elif event.key in (pygame.K_LEFT, pygame.K_a):
-                    self.player.set_direction(-1)
-                elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                    self.player.set_direction(1)
-            elif event.type == pygame.KEYUP:
-                if event.key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d):
-                    # Check if opposite key is still pressed
-                    keys = pygame.key.get_pressed()
-                    if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-                        self.player.set_direction(-1)
-                    elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-                        self.player.set_direction(1)
-                    else:
-                        self.player.set_direction(0)
+            self.vel_y += self.gravity
         
-        # Handle held keys
+        self.rect.y += self.vel_y
+        if self.shoot_cooldown > 0: self.shoot_cooldown -= 1
+
+    def draw(self, surface):
+        color = (255, 215, 0) if self.powerup_timer > 0 else (255, 255, 0)
+        pygame.draw.rect(surface, color, self.rect)
+        if self.powerup_timer > 0:
+            pygame.draw.rect(surface, (0, 200, 255), self.rect, 3)
+        pygame.draw.rect(surface, (0,0,0), self.rect, 2)
+        pygame.draw.rect(surface, (0,0,0), (self.rect.centerx-2, self.rect.top-8, 4, 8))
+
+class Platform:
+    def __init__(self, y, score):
+        self.width, self.height = 60, 12
+        self.rect = pygame.Rect(random.randint(0, WIDTH-self.width), y, self.width, self.height)
+        if score < 1500: self.type = 'green'
+        else: self.type = random.choice(['green', 'blue', 'white', 'red'])
+        self.vel_x = random.choice([-2, 2]) if self.type == 'blue' else 0
+        self.has_item = None
+        
+        item_roll = random.random()
+        if item_roll < 0.01: self.has_item = 'rocket'
+        elif item_roll < 0.025: self.has_item = 'propeller'
+        elif item_roll < 0.05: self.has_item = 'spring'
+
+    def update(self):
+        if self.type == 'blue':
+            self.rect.x += self.vel_x
+            if self.rect.left < 0 or self.rect.right > WIDTH: self.vel_x *= -1
+
+    def draw(self, surface):
+        color = {'green': PLAT_GREEN, 'blue': PLAT_BLUE, 'red': PLAT_RED, 'white': PLAT_WHITE}[self.type]
+        pygame.draw.rect(surface, color, self.rect)
+        pygame.draw.rect(surface, (0,0,0), self.rect, 1)
+        if self.has_item == 'spring':
+            pygame.draw.rect(surface, (100,100,100), (self.rect.centerx-6, self.rect.top-10, 12, 10))
+        elif self.has_item == 'rocket':
+            pygame.draw.polygon(surface, (255, 0, 0), [(self.rect.centerx, self.rect.top-25), (self.rect.centerx-10, self.rect.top), (self.rect.centerx+10, self.rect.top)])
+        elif self.has_item == 'propeller':
+            pygame.draw.circle(surface, (0, 100, 255), (self.rect.centerx, self.rect.top-8), 8)
+
+class Monster:
+    def __init__(self, y):
+        self.width, self.height = 45, 45
+        self.rect = pygame.Rect(random.randint(0, WIDTH-self.width), y, self.width, self.height)
+        self.vel_x = random.choice([-3, 3])
+
+    def update(self):
+        self.rect.x += self.vel_x
+        if self.rect.left < 0 or self.rect.right > WIDTH: self.vel_x *= -1
+
+    def draw(self, surface):
+        pygame.draw.ellipse(surface, MONSTER_COLOR, self.rect)
+        pygame.draw.circle(surface, (255,255,255), (self.rect.x+12, self.rect.y+15), 6)
+        pygame.draw.circle(surface, (255,255,255), (self.rect.x+33, self.rect.y+15), 6)
+
+class BlackHole:
+    def __init__(self, y):
+        self.center = [random.randint(50, WIDTH-50), y]
+        self.radius = 35
+
+    def draw(self, surface):
+        pygame.draw.circle(surface, BLACK_HOLE_COLOR, self.center, self.radius)
+        pygame.draw.circle(surface, (50, 50, 50), self.center, self.radius, 3)
+
+# --- ENGINE ---
+
+def run_game():
+    player = Player()
+    # Initialize with a base platform
+    platforms = [Platform(HEIGHT - 50, 0)]
+    platforms[0].rect.x, platforms[0].rect.width = 0, WIDTH
+    
+    monsters, black_holes, bullets = [], [], []
+
+    # Initial generation
+    for i in range(1, 15):
+        platforms.append(Platform(HEIGHT - i*70, 0))
+
+    running = True
+    while running:
+        if RENDER:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT: pygame.quit(); sys.exit()
+
         keys = pygame.key.get_pressed()
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            if not (keys[pygame.K_RIGHT] or keys[pygame.K_d]):
-                self.player.set_direction(-1)
-        elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            self.player.set_direction(1)
-        else:
-            self.player.set_direction(0)
-    
-    def _update(self, dt):
-        """
-        Update game logic.
-        
-        Args:
-            dt: Delta time in seconds
-        """
-        if self.game_over:
-            return
-        
-        # Update player (in world coordinates)
-        self.player.update(dt)
-        
-        # Update particles
-        self.particles = [p for p in self.particles if p.update(dt)]
-        
-        # Handle collisions
-        self._handle_collisions()
-        
-        # Update camera and scrolling (also updates score)
-        self._update_camera()
-        
-        # Update highest point reached (world coordinates)
-        if self.player.y < self.highest_world_y:
-            self.highest_world_y = self.player.y
-        
-        # Check game over condition - player falls below screen bottom in screen coordinates
-        player_screen_y = self.player.y - self.camera_y
-        if player_screen_y > HEIGHT + 50:
-            self._end_game()
-        
-        # Generate new platforms as needed
-        self._generate_platforms()
+        player.move(keys)
 
-    def _handle_collisions(self):
-        """Handle collisions between player and platforms."""
-        # Only check collisions when player is falling
-        if self.player.velocity_y <= 0:
-            return
-        
-        for platform in self.platforms:
-            if platform.collides(self.player):
-                if platform.on_land(self.player):
-                    # Create landing particles
-                    self._create_landing_particles(platform.x + platform.width // 2, platform.y)
+        if (keys[pygame.K_SPACE] or keys[pygame.K_w] or keys[pygame.K_UP]) and player.shoot_cooldown == 0:
+            bullets.append(Projectile(player.rect.centerx - 3, player.rect.top))
+            player.shoot_cooldown = 12
+
+        # Camera scroll
+        if player.rect.y < HEIGHT // 2:
+            diff = HEIGHT // 2 - player.rect.y
+            player.rect.y = HEIGHT // 2
+            player.score += diff // 10
+            for p in platforms: p.rect.y += diff
+            for m in monsters: m.rect.y += diff
+            for b in bullets: b.rect.y += diff
+            for bh in black_holes: bh.center[1] += diff
+
+        # Update & Cleanup
+        for b in bullets[:]:
+            b.update()
+            if b.rect.bottom < 0: bullets.remove(b)
+
+        for p in platforms: p.update()
+        for m in monsters: m.update()
+
+        # REMOVE platforms that fall off bottom
+        platforms = [p for p in platforms if p.rect.top < HEIGHT]
+        monsters = [m for m in monsters if m.rect.top < HEIGHT]
+        black_holes = [bh for bh in black_holes if bh.center[1] - bh.radius < HEIGHT]
+
+        # SPAWN new platforms based on the highest existing one
+        while len(platforms) < 15:
+            # Find the highest platform currently in the list
+            highest_y = min([p.rect.y for p in platforms])
+            new_y = highest_y - random.randint(80, 110)
+            
+            new_plat = Platform(new_y, player.score)
+            platforms.append(new_plat)
+            
+            if random.random() < 0.07: monsters.append(Monster(new_y - 50))
+            if random.random() < 0.03: black_holes.append(BlackHole(new_y - 90))
+
+        # Collisions
+        for p in platforms:
+            if player.rect.colliderect(p.rect) and player.vel_y > 0:
+                if player.rect.bottom <= p.rect.centery + 10:
+                    if p.type == 'red':
+                        platforms.remove(p)
+                        break
+                    else:
+                        player.rect.bottom = p.rect.top
+                        player.vel_y = player.jump_power
+                        if p.has_item == 'spring': player.vel_y *= 1.8
+                        if p.has_item == 'rocket': player.powerup_timer = 120
+                        if p.has_item == 'propeller': player.powerup_timer = 60
+                        if p.type == 'white': platforms.remove(p)
+                        break
+
+        for m in monsters[:]:
+            for b in bullets[:]:
+                if b.rect.colliderect(m.rect):
+                    if b in bullets: bullets.remove(b)
+                    if m in monsters: monsters.remove(m)
                     break
+            
+            if m in monsters and player.rect.colliderect(m.rect):
+                if player.powerup_timer > 0:
+                    monsters.remove(m)
+                elif player.vel_y > 0 and player.rect.bottom < m.rect.centery:
+                    monsters.remove(m)
+                    player.vel_y = player.jump_power
+                else: running = False
 
-    def _create_landing_particles(self, x, y):
-        """Create particle effect at landing position (world coordinates)."""
-        for _ in range(PARTICLE_COUNT):
-            self.particles.append(Particle(x, y))
-    
-    def _update_camera(self):
-        """Update camera position for scrolling effect.
-        
-        In Doodle Jump style: as player climbs up (world_y decreases), 
-        the camera follows by increasing camera_y, which makes the world
-        scroll down on screen. The player stays visible in the upper portion
-        of the screen while the world moves beneath them.
-        """
-        # Calculate player's screen position
-        # Formula: screen_y = world_y - camera_y
-        player_screen_y = self.player.y - self.camera_y
-        
-        # CRITICAL: Ensure player is always visible on screen
-        # If player goes above the dead zone OR above screen top, scroll immediately
-        if player_screen_y < CAMERA_DEAD_ZONE_TOP or player_screen_y < 0:
-            # Calculate target camera position to keep player at dead zone
-            # We want: player_screen_y = CAMERA_DEAD_ZONE_TOP (after scrolling)
-            # So: CAMERA_DEAD_ZONE_TOP = player.y - new_camera_y
-            # Therefore: new_camera_y = player.y - CAMERA_DEAD_ZONE_TOP
-            target_camera_y = self.player.y - CAMERA_DEAD_ZONE_TOP
-            
-            # Only scroll upward (camera_y can only increase, never decrease)
-            # This ensures we only scroll when player is climbing, not falling
-            old_camera_y = self.camera_y
-            
-            # If player is above screen, immediately bring into view
-            # Otherwise, scroll to keep player at dead zone
-            if player_screen_y < 0 or target_camera_y > self.camera_y:
-                self.camera_y = target_camera_y
-                scroll_distance = self.camera_y - old_camera_y
-            else:
-                scroll_distance = 0
-            
-            # Update score based on distance climbed
-            if scroll_distance > 0:
-                self.score += max(1, int(scroll_distance / 3))
-    
-    def _generate_platforms(self):
-        """Generate new platforms above the screen as needed.
-        
-        Ensures platforms are always reachable by tracking the last platform
-        and limiting horizontal distance between consecutive platforms.
-        """
-        if not self.platforms:
-            return
-        
-        # Find the highest platform (lowest y value in world coordinates)
-        highest_platform = min(self.platforms, key=lambda p: p.y)
-        
-        # Calculate what world y position is currently at the top of the screen
-        top_of_screen_world_y = self.camera_y
-        
-        # Use the highest platform as reference for generating the next one
-        # This ensures we build upward from the highest existing platform
-        last_platform = highest_platform
-        last_center_x = last_platform.x + last_platform.width // 2
-        
-        # Generate platforms above the current view
-        while highest_platform.y > top_of_screen_world_y - PLATFORM_BUFFER_ZONE:
-            # Calculate new y position (above the last platform)
-            new_y = last_platform.y - PLATFORM_SPACING - random.randint(-15, 15)
-            
-            # Calculate reachable x position relative to last platform
-            # Offset must be within jump range to ensure reachability
-            # Choose random direction (left or right)
-            direction = random.choice([-1, 1])
-            
-            # Random offset between MIN and MAX in chosen direction
-            # This ensures platforms are always reachable but have variety
-            offset_magnitude = random.randint(PLATFORM_MIN_OFFSET, PLATFORM_MAX_OFFSET)
-            offset = direction * offset_magnitude
-            
-            # Ensure offset stays within max jump distance (safety check)
-            offset = max(-PLATFORM_MAX_OFFSET, min(PLATFORM_MAX_OFFSET, offset))
-            
-            # Calculate new platform center
-            new_center_x = last_center_x + offset
-            
-            # Clamp to screen bounds with margins
-            margin = 10
-            new_center_x = max(PLATFORM_WIDTH // 2 + margin, 
-                              min(new_center_x, WIDTH - PLATFORM_WIDTH // 2 - margin))
-            
-            # Platform x is left edge
-            x = new_center_x - PLATFORM_WIDTH // 2
-            
-            # Random platform type
-            kind = self._random_platform_kind()
-            
-            platform = Platform(x, new_y, self.assets, kind=kind)
-            self.platforms.append(platform)
-            
-            # Update references for next iteration
-            last_platform = platform
-            last_center_x = new_center_x
-            highest_platform = platform
-        
-        # Remove platforms that are too far below the screen
-        bottom_of_screen_world_y = self.camera_y + HEIGHT
-        self.platforms = [p for p in self.platforms if p.y < bottom_of_screen_world_y + 200]
-    
-    def _create_background(self):
-        """Create a cached background surface with gradient."""
-        surface = pygame.Surface((WIDTH, HEIGHT))
-        # Draw gradient from light blue to white
-        for y in range(HEIGHT):
-            ratio = y / HEIGHT
-            r = int(COLOR_BACKGROUND_START[0] * (1 - ratio) + COLOR_BACKGROUND_END[0] * ratio)
-            g = int(COLOR_BACKGROUND_START[1] * (1 - ratio) + COLOR_BACKGROUND_END[1] * ratio)
-            b = int(COLOR_BACKGROUND_START[2] * (1 - ratio) + COLOR_BACKGROUND_END[2] * ratio)
-            pygame.draw.line(surface, (r, g, b), (0, y), (WIDTH, y))
-        return surface
-    
-    def _draw_background(self):
-        """Draw the cached background."""
-        self.screen.blit(self.background_surface, (0, 0))
-    
-    def _draw(self):
-        """Draw everything on the screen."""
-        # Clear screen with background
-        self._draw_background()
-        
-        # Draw platforms
-        for platform in self.platforms:
-            platform.draw(self.screen, self.camera_y)
-        
-        # Draw particles
-        for particle in self.particles:
-            particle.draw(self.screen, self.camera_y)
-        
-        # Draw player (always draw - player draw method handles visibility)
-        self.player.draw(self.screen, self.camera_y)
-        
-        # Draw UI
-        self._draw_ui()
-        
-        # Draw game over screen
-        if self.game_over:
-            self._draw_game_over()
-        
-        pygame.display.flip()
-    
-    def _draw_ui(self):
-        """Draw user interface (score, etc.)."""
-        # Draw score
-        score_text = self.font_medium.render(f"Score: {self.score}", True, COLOR_TEXT)
-        self.screen.blit(score_text, (10, 10))
-        
-        # Draw height (based on world coordinates)
-        height = max(0, int((HEIGHT - 100 - self.highest_world_y) / 10))
-        height_text = self.font_small.render(
-            f"Height: {height}",
-            True,
-            COLOR_TEXT_LIGHT
-        )
-        self.screen.blit(height_text, (10, 40))
-    
-    def _draw_game_over(self):
-        """Draw game over screen."""
-        # Semi-transparent overlay
-        overlay = pygame.Surface((WIDTH, HEIGHT))
-        overlay.set_alpha(180)
-        overlay.fill((0, 0, 0))
-        self.screen.blit(overlay, (0, 0))
-        
-        # Game over text
-        game_over_text = self.font_large.render("Game Over", True, (255, 255, 255))
-        text_rect = game_over_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 40))
-        self.screen.blit(game_over_text, text_rect)
-        
-        # Final score
-        score_text = self.font_medium.render(f"Final Score: {self.score}", True, (255, 255, 255))
-        score_rect = score_text.get_rect(center=(WIDTH // 2, HEIGHT // 2))
-        self.screen.blit(score_text, score_rect)
-        
-        # Restart instruction
-        restart_text = self.font_small.render("Press R to restart", True, (200, 200, 200))
-        restart_rect = restart_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 40))
-        self.screen.blit(restart_text, restart_rect)
+        for bh in black_holes:
+            dist = math.hypot(player.rect.centerx - bh.center[0], player.rect.centery - bh.center[1])
+            if dist < bh.radius + 5 and player.powerup_timer <= 0:
+                running = False
 
-    def _end_game(self):
-        """End the game."""
-        self.game_over = True
-    
-    def _restart(self):
-        """Restart the game."""
-        self.game_over = False
-        self.score = 0
-        self.highest_world_y = HEIGHT - 100
-        self.camera_y = 0
-        self.particles = []
-        
-        # Reset player to initial world position
-        initial_world_y = HEIGHT - 100
-        self.player = Player(WIDTH // 2, initial_world_y, self.assets)
-        self.player.jump()
-        
-        # Regenerate platforms
-        self.platforms = []
-        self._generate_initial_platforms()
-        
-        # Reset background cache (in case we want dynamic backgrounds later)
-        self.background_surface = self._create_background()
-    
-    def run(self):
-        """Run the main game loop."""
-        while self.running:
-            # Calculate delta time
-            dt = self.clock.tick(FPS) / 1000.0  # Convert to seconds
-            
-            # Handle input
-            self._handle_input()
-            
-            # Update game logic
-            self._update(dt)
-            
-            # Draw everything
-            self._draw()
-        
-        pygame.quit()
+        if player.rect.top > HEIGHT: running = False
+
+        if RENDER:
+            screen.fill(BACKGROUND)
+            for b in bullets: b.draw(screen)
+            for p in platforms: p.draw(screen)
+            for m in monsters: m.draw(screen)
+            for bh in black_holes: bh.draw(screen)
+            player.draw(screen)
+            font = pygame.font.SysFont("Arial", 18, bold=True)
+            txt = font.render(f"SCORE: {int(player.score)}", True, (50, 50, 50))
+            screen.blit(txt, (10, 10))
+            pygame.display.flip()
+            clock.tick(FPS)
+
+    return player.score
+
+if __name__ == "__main__":
+    while True:
+        s = run_game()
+        print(f"Game Over! Score: {int(s)}")
