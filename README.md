@@ -1,66 +1,33 @@
-# Doodle Jump - Python/Pygame Version
+# Gymnasium Examples
+Some simple examples of Gymnasium environments and wrappers.
+For some explanations of these examples, see the [Gymnasium documentation](https://gymnasium.farama.org).
 
-A clean, well-structured Doodle Jump-style game built with Python and Pygame.
+### Environments
+This repository hosts the examples that are shown [on the environment creation documentation](https://gymnasium.farama.org/tutorials/gymnasium_basics/environment_creation/).
+- `GridWorldEnv`: Simplistic implementation of gridworld environment
 
-## Features
+### Wrappers
+This repository hosts the examples that are shown [on wrapper documentation](https://gymnasium.farama.org/api/wrappers/).
+- `ClipReward`: A `RewardWrapper` that clips immediate rewards to a valid range
+- `DiscreteActions`: An `ActionWrapper` that restricts the action space to a finite subset
+- `RelativePosition`: An `ObservationWrapper` that computes the relative position between an agent and a target
+- `ReacherRewardWrapper`: Allow us to weight the reward terms for the reacher environment
 
-- **Smooth Physics**: Frame-independent movement using delta time
-- **Scrolling Camera**: Dynamic camera that follows the player upward
-- **Platform Types**: 
-  - Normal platforms (green)
-  - Breakable platforms (orange) - break when jumped on
-  - Spring platforms (blue) - provide super jump boost
-- **Visual Effects**: Particle effects when landing on platforms
-- **Score System**: Score increases as you climb higher
-- **Game Over & Restart**: Press R to restart after game over
+### Contributing
+If you would like to contribute, follow these steps:
+- Fork this repository
+- Clone your fork
+- Set up pre-commit via `pre-commit install`
 
-## Requirements
+PRs may require accompanying PRs in [the documentation repo](https://github.com/Farama-Foundation/Gymnasium/tree/main/docs).
 
-- Python 3.7+
-- Pygame 2.5.0+
 
 ## Installation
 
-1. Install dependencies:
-```bash
-pip install -r requirements.txt
+To install your new environment, run the following commands:
+
+```{shell}
+cd gymnasium_env_doodle
+pip install -e .
 ```
-
-## Running the Game
-
-```bash
-python main.py
-```
-
-## Controls
-
-- **Arrow Keys** or **A/D**: Move left/right
-- **R**: Restart game (when game over)
-- **ESC**: Quit game
-
-## Game Mechanics
-
-- The player automatically jumps when landing on platforms
-- The camera scrolls upward as you climb higher
-- Platforms are randomly generated above the screen
-- Falling below the bottom of the screen results in game over
-- Score increases based on how high you climb
-
-## Code Structure
-
-- `main.py`: Entry point
-- `game.py`: Main game class and game loop
-- `player.py`: Player character class
-- `platform.py`: Platform class with collision detection
-- `assets.py`: Asset manager for loading and sizing images
-- `constants.py`: All game constants and configuration
-
-## Asset Sizing
-
-All assets are automatically resized to consistent dimensions:
-- Player: 40x40 pixels
-- Platforms: 80x16 pixels
-- Spring: 20x20 pixels
-
-The asset manager ensures all images are properly scaled and cached for performance.
 

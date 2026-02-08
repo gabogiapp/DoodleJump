@@ -10,6 +10,7 @@ def main():
 
     game = GameView()
     frame_count = 0
+    last_player_pos = None
 
     # Cache for low priority items
     lp_data = {
@@ -34,6 +35,14 @@ def main():
 
         # 2. High Priority Detection:
         player_bbox, player_center = game.detectPlayer(coloredFrame)
+        if last_player_pos and player_center:
+            # Calculate velocity manually for the AI
+            vel_x = player_center[0] - last_player_pos[0]
+            vel_y = player_center[1] - last_player_pos[1]
+        else:
+            vel_x, vel_y = 0, 0
+
+        last_player_pos = player_center
         moving_platforms_boxes = game.detectMovingPlatforms(coloredFrame)
         blank_platforms_boxes = game.detectWhitePlatforms(coloredFrame)
         static_platforms_boxes = game.detectPlatforms(coloredFrame)
@@ -50,7 +59,7 @@ def main():
         # Draw High Priority first
         if player_bbox:
             draw_labeled_box(frame, player_bbox, "Player", (0, 255, 0))
-        
+
         for bbox in monsters_bboxes:
             draw_labeled_box(frame, bbox, "MONSTER", (0, 165, 255), thickness=3)
 
@@ -59,17 +68,17 @@ def main():
 
         for bbox in blank_platforms_boxes:
             draw_labeled_box(frame, bbox, "Blank", (255, 255, 255))
-        
+
         for bbox in static_platforms_boxes:
             draw_labeled_box(frame, bbox, "", (0, 0, 255), 2)
-        
+
         for bbox in springs:
             draw_labeled_box(frame, bbox, "Spring", (0, 0, 255), 1)
 
         if lp_data["rocket"]:
             bbox = lp_data["rocket"]
             draw_labeled_box(frame, bbox, "Rocket", (0, 0, 255), 1)
-        
+
         if lp_data["propellor"]:
             bbox = lp_data["propellor"]
             draw_labeled_box(frame, bbox, "Propellor", (0, 0, 255), 1)
@@ -81,7 +90,7 @@ def main():
         print(f"Elapsed: {elapsed:.2f}ms")
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-                
+
     cv2.destroyAllWindows()
 
 def draw_labeled_box(frame, bbox, label, color, thickness=2):
@@ -93,9 +102,9 @@ def draw_black_holes(frame, contours, label="Black Hole", color=(0, 0, 255), thi
     for cnt in contours:
         cv2.drawContours(frame, [cnt], -1, color, thickness)
         x, y, w, h = cv2.boundingRect(cnt)
-        cv2.putText(frame, label, (x, y - 10), 
+        cv2.putText(frame, label, (x, y - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-    
+
 
 
 if __name__ == "__main__":

@@ -27,14 +27,14 @@ class GameView():
             sct_img = sct.grab(monitor)
             frame = np.array(sct_img)
             return frame
-    
+
     def preProcessImage(self, frame, target_size=None):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (3,3), 0)
         if target_size is not None:
             gray = cv2.resize(gray, target_size, interpolation=cv2.INTER_AREA)
         return gray
-    
+
     def _iou(self, boxA, boxB):
         # box = (x1, y1, x2, y2, score)
         xA = max(boxA[0], boxB[0])
@@ -88,15 +88,15 @@ class GameView():
             return platforms
         else:
             return []
-        
+
     def detectSprings(self, frame, platforms):
         springs = []
         if not platforms:
             return springs
 
         gray = self.preProcessImage(frame)
-        threshold = 0.6 
-        
+        threshold = 0.6
+
         # Expansion variables
         p_top, p_bot, p_side = 40, 20, 15
 
@@ -106,18 +106,18 @@ class GameView():
             s_bottom = py + ph + p_bot
             s_left = max(0, px - p_side)
             s_right = px + pw + p_side
-            
+
             roi = gray[s_top:s_bottom, s_left:s_right]
-            
+
             if roi.shape[0] < self.spring_h or roi.shape[1] < self.spring_w:
                 continue
 
             # 2. Match Template
             res = cv2.matchTemplate(roi, self.spring_template, cv2.TM_CCOEFF_NORMED)
-            
+
             # 3. Find ALL matches above threshold in this ROI
             y_locs, x_locs = np.where(res >= threshold)
-            
+
             candidates = []
             for (x, y) in zip(x_locs, y_locs):
                 # Map ROI coordinates back to full screen coordinates
@@ -134,9 +134,9 @@ class GameView():
 
                 # Remove any other candidate that overlaps too much with the one we just saved
                 candidates = [c for c in candidates if self._iou(box, c) < 0.3]
-                
+
         return springs
-    
+
     def detectPropellors(self, frame):
         lower_orange = np.array([5, 210, 200])
         upper_orange = np.array([15, 255, 255])
@@ -150,7 +150,7 @@ class GameView():
             return (x-5, y-5, w+25, h+10), center
         else:
             return None, None
-    
+
     def detectRockets(self, frame):
         lower_blue = np.array([88, 34, 195])
         upper_blue = np.array([92, 54, 215])
@@ -221,7 +221,7 @@ class GameView():
             return platforms
         else:
             return []
-    
+
     def detectBlackHoles(self, frame, min_area=500):
         # Define black color range (low value, any hue/saturation)
         lower_black = np.array([0, 0, 0])
@@ -251,12 +251,12 @@ class GameView():
             black_holes.append(approx)
 
         return black_holes
-    
+
     def detectBrownPlatforms(self, hsv_frame):
         # Brown in HSV is roughly Hue 8-20, Saturation 50-180, Value 50-180
         lower_brown = np.array([8, 50, 40])
         upper_brown = np.array([22, 210, 200])
-        
+
         mask = cv2.inRange(hsv_frame, lower_brown, upper_brown)
 
         # Clean up the cracks inside the platform so it stays one solid box
@@ -265,7 +265,7 @@ class GameView():
 
         # Find contours
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+
         platforms = []
         if contours:
             for contour in contours:
@@ -273,9 +273,9 @@ class GameView():
                 area = w * h
                 aspect_ratio = w / float(h)
 
-                if area < 300: 
+                if area < 300:
                     continue
-                
+
                 if aspect_ratio < 2.0:
                     continue
 
@@ -283,12 +283,12 @@ class GameView():
                     continue
 
                 platforms.append((x, y, w, h))
-                
+
         return platforms
 
     def detectMonsters(self, hsv_frame, excluded_bboxes, player_center):
         # 1. Detect everything that isn't the background paper
-        lower_paper = np.array([0, 0, 180]) 
+        lower_paper = np.array([0, 0, 180])
         upper_paper = np.array([180, 60, 255])
         bg_mask = cv2.inRange(hsv_frame, lower_paper, upper_paper)
         not_paper_mask = cv2.bitwise_not(bg_mask)
@@ -306,7 +306,7 @@ class GameView():
         # Clean up noise
         kernel = np.ones((3,3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        
+
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         monster_boxes = []
@@ -332,7 +332,7 @@ class GameView():
                 if (abs(x - ex_x) < 30 and abs(y - ex_y) < 30):
                     is_excluded = True
                     break
-            
+
             if is_excluded: continue
 
             # Final check: Monsters are usually very saturated

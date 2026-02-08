@@ -2,23 +2,22 @@ import pygame
 import sys
 import random
 import math
-import os
 
 # --- CONFIGURATION ---
 RENDER = True
-RESOLUTION = WIDTH, HEIGHT = 400, 700
-TITLE = "Doodle Jump AI: Combat & Rare Items"
+RESOLUTION = WIDTH, HEIGHT = 448, 682
+TITLE = "Doodle Jump"
 FPS = 60
 
-pygame.init()
-screen = pygame.display.set_mode(RESOLUTION) if RENDER else None
-pygame.display.set_caption(TITLE)
-clock = pygame.time.Clock()
+# FEATURE FLAGS
+ENABLE_MONSTERS = False
+ENABLE_BLACK_HOLES = False
+ENABLE_POWERUPS = False
 
 # Colors
 BACKGROUND = (250, 248, 239)
 PLAT_GREEN, PLAT_BLUE = (63, 255, 63), (127, 191, 255)
-PLAT_RED, PLAT_WHITE = (191, 0, 0), (255, 255, 255)
+PLAT_WHITE = (255, 255, 255)
 MONSTER_COLOR = (138, 43, 226)
 BLACK_HOLE_COLOR = (20, 20, 20)
 BULLET_COLOR = (255, 50, 50)
@@ -50,10 +49,13 @@ class Player:
         self.powerup_timer = 0
         self.shoot_cooldown = 0
 
-    def move(self, keys):
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]: self.vel_x -= self.accel_x
-        elif keys[pygame.K_RIGHT] or keys[pygame.K_d]: self.vel_x += self.accel_x
-        else: self.vel_x *= 0.85 
+    def move(self, keys=None):
+        if keys is not None:
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]: self.vel_x -= self.accel_x
+            elif keys[pygame.K_RIGHT] or keys[pygame.K_d]: self.vel_x += self.accel_x
+            else: self.vel_x *= 0.85
+        else:
+            self.vel_x *= 0.85
 
         self.vel_x = max(-self.max_vel_x, min(self.max_vel_x, self.vel_x))
         self.rect.x += self.vel_x
@@ -65,7 +67,7 @@ class Player:
             self.powerup_timer -= 1
         else:
             self.vel_y += self.gravity
-        
+
         self.rect.y += self.vel_y
         if self.shoot_cooldown > 0: self.shoot_cooldown -= 1
 
@@ -81,15 +83,21 @@ class Platform:
     def __init__(self, y, score):
         self.width, self.height = 60, 12
         self.rect = pygame.Rect(random.randint(0, WIDTH-self.width), y, self.width, self.height)
-        if score < 1500: self.type = 'green'
-        else: self.type = random.choice(['green', 'blue', 'white', 'red'])
+
+        # Generation Logic: Only Green, Blue, and White
+        if score < 1000:
+            self.type = 'green'
+        else:
+            self.type = random.choice(['green', 'green', 'blue', 'white'])
+
         self.vel_x = random.choice([-2, 2]) if self.type == 'blue' else 0
         self.has_item = None
-        
-        item_roll = random.random()
-        if item_roll < 0.01: self.has_item = 'rocket'
-        elif item_roll < 0.025: self.has_item = 'propeller'
-        elif item_roll < 0.05: self.has_item = 'spring'
+
+        if ENABLE_POWERUPS:
+            item_roll = random.random()
+            if item_roll < 0.01: self.has_item = 'rocket'
+            elif item_roll < 0.025: self.has_item = 'propeller'
+            elif item_roll < 0.05: self.has_item = 'spring'
 
     def update(self):
         if self.type == 'blue':
@@ -97,7 +105,7 @@ class Platform:
             if self.rect.left < 0 or self.rect.right > WIDTH: self.vel_x *= -1
 
     def draw(self, surface):
-        color = {'green': PLAT_GREEN, 'blue': PLAT_BLUE, 'red': PLAT_RED, 'white': PLAT_WHITE}[self.type]
+        color = {'green': PLAT_GREEN, 'blue': PLAT_BLUE, 'white': PLAT_WHITE}[self.type]
         pygame.draw.rect(surface, color, self.rect)
         pygame.draw.rect(surface, (0,0,0), self.rect, 1)
         if self.has_item == 'spring':
@@ -133,12 +141,12 @@ class BlackHole:
 
 # --- ENGINE ---
 
-def run_game():
+def run_game(screen, clock):
     player = Player()
-    # Initialize with a base platform
     platforms = [Platform(HEIGHT - 50, 0)]
     platforms[0].rect.x, platforms[0].rect.width = 0, WIDTH
-    
+    platforms[0].type = 'green'
+
     monsters, black_holes, bullets = [], [], []
 
     # Initial generation
@@ -149,7 +157,8 @@ def run_game():
     while running:
         if RENDER:
             for event in pygame.event.get():
-                if event.type == pygame.QUIT: pygame.quit(); sys.exit()
+                if event.type == pygame.QUIT:
+                    return None # Signal to exit program entirely
 
         keys = pygame.key.get_pressed()
         player.move(keys)
@@ -158,11 +167,11 @@ def run_game():
             bullets.append(Projectile(player.rect.centerx - 3, player.rect.top))
             player.shoot_cooldown = 12
 
-        # Camera scroll
+        # Camera scroll & Height-based Score
         if player.rect.y < HEIGHT // 2:
             diff = HEIGHT // 2 - player.rect.y
             player.rect.y = HEIGHT // 2
-            player.score += diff // 10
+            player.score += diff # Score tied directly to height climbed
             for p in platforms: p.rect.y += diff
             for m in monsters: m.rect.y += diff
             for b in bullets: b.rect.y += diff
@@ -176,38 +185,33 @@ def run_game():
         for p in platforms: p.update()
         for m in monsters: m.update()
 
-        # REMOVE platforms that fall off bottom
         platforms = [p for p in platforms if p.rect.top < HEIGHT]
         monsters = [m for m in monsters if m.rect.top < HEIGHT]
         black_holes = [bh for bh in black_holes if bh.center[1] - bh.radius < HEIGHT]
 
-        # SPAWN new platforms based on the highest existing one
+        # SPAWN logic
         while len(platforms) < 15:
-            # Find the highest platform currently in the list
             highest_y = min([p.rect.y for p in platforms])
             new_y = highest_y - random.randint(80, 110)
-            
             new_plat = Platform(new_y, player.score)
             platforms.append(new_plat)
-            
-            if random.random() < 0.07: monsters.append(Monster(new_y - 50))
-            if random.random() < 0.03: black_holes.append(BlackHole(new_y - 90))
+
+            if ENABLE_MONSTERS and random.random() < 0.07:
+                monsters.append(Monster(new_y - 50))
+            if ENABLE_BLACK_HOLES and random.random() < 0.03:
+                black_holes.append(BlackHole(new_y - 90))
 
         # Collisions
         for p in platforms:
             if player.rect.colliderect(p.rect) and player.vel_y > 0:
                 if player.rect.bottom <= p.rect.centery + 10:
-                    if p.type == 'red':
-                        platforms.remove(p)
-                        break
-                    else:
-                        player.rect.bottom = p.rect.top
-                        player.vel_y = player.jump_power
-                        if p.has_item == 'spring': player.vel_y *= 1.8
-                        if p.has_item == 'rocket': player.powerup_timer = 120
-                        if p.has_item == 'propeller': player.powerup_timer = 60
-                        if p.type == 'white': platforms.remove(p)
-                        break
+                    player.rect.bottom = p.rect.top
+                    player.vel_y = player.jump_power
+                    if p.has_item == 'spring': player.vel_y *= 1.8
+                    if p.has_item == 'rocket': player.powerup_timer = 120
+                    if p.has_item == 'propeller': player.powerup_timer = 60
+                    if p.type == 'white': platforms.remove(p)
+                    break
 
         for m in monsters[:]:
             for b in bullets[:]:
@@ -215,7 +219,6 @@ def run_game():
                     if b in bullets: bullets.remove(b)
                     if m in monsters: monsters.remove(m)
                     break
-            
             if m in monsters and player.rect.colliderect(m.rect):
                 if player.powerup_timer > 0:
                     monsters.remove(m)
@@ -247,6 +250,16 @@ def run_game():
     return player.score
 
 if __name__ == "__main__":
+    pygame.init()
+    main_screen = pygame.display.set_mode(RESOLUTION) if RENDER else None
+    pygame.display.set_caption(TITLE)
+    main_clock = pygame.time.Clock()
+
     while True:
-        s = run_game()
-        print(f"Game Over! Score: {int(s)}")
+        final_score = run_game(main_screen, main_clock)
+        if final_score is None: # User closed the window
+            break
+        print(f"Game Over! Score: {int(final_score)}")
+
+    pygame.quit()
+    sys.exit()
